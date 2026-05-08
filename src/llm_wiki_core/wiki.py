@@ -11,27 +11,50 @@ WIKILINK_RE = re.compile(r"\[\[([^\]|#]+)(?:#[^\]|]+)?(?:\|[^\]]+)?\]\]")
 FRONTMATTER_RE = re.compile(r"^---\n(.*?)\n---\n", re.DOTALL)
 
 
-DEFAULT_SCHEMA = """# Schema
+DEFAULT_SCHEMA = """# Wiki Schema
 
-This wiki demonstrates the minimal LLM Wiki mechanism.
+Use this schema when creating or updating generated wiki pages.
 
-## Layers
-- `raw/sources/`: immutable uploaded source files.
-- `wiki/`: LLM-maintained markdown pages.
-- `wiki/schema.md`: conventions the LLM follows while maintaining the wiki.
+## Page Types
 
-## Page conventions
-- Every page starts with YAML frontmatter.
-- Use `type` values such as `source`, `concept`, `entity`, `overview`, and `query`.
-- Use Obsidian-style `[[wikilinks]]` to connect pages.
-- Prefer concise pages that can be updated incrementally.
-- Keep source traceability in `sources`.
+- `overview`: high-level map of the wiki's current knowledge.
+- `source`: summary of one raw source and the key facts it supports.
+- `concept`: reusable idea, pattern, technology, risk, or behavior.
+- `entity`: named system, service, team, person, model, company, or dataset.
+- `query`: saved question, investigation, or unresolved issue.
+- `lint`: maintenance report about wiki health.
 
-## Operations
-- Ingest: read a source, create/update wiki pages, update `index.md`, append `log.md`.
-- Query: search wiki pages first, then answer with page citations.
-- Graph: build links from `[[wikilinks]]`.
-- Lint: check wiki health, find broken links/orphans/contradictions, and save lint reports.
+## Required Frontmatter
+
+Every generated wiki page starts with YAML frontmatter:
+
+```yaml
+---
+title: Human-readable page title
+type: overview | source | concept | entity | query | lint
+sources: []
+created: ISO-8601 timestamp
+updated: ISO-8601 timestamp
+---
+```
+
+Use `sources` for raw source filenames or wiki pages that support the page. The application preserves `created` and refreshes `updated` when writing pages.
+
+## Body Conventions
+
+- Start with one `# Title` heading that matches the frontmatter title.
+- Keep pages concise and update-friendly.
+- Prefer bullets and short sections over long prose.
+- Use Obsidian-style `[[wikilinks]]` for related pages.
+- Link important concepts, entities, source summaries, and open questions.
+- Do not paste long raw-source excerpts; summarize and quote only short evidence.
+
+## Page-Specific Guidance
+
+- `source` pages should include summary, key facts, and links to extracted concepts/entities.
+- `concept` and `entity` pages should merge new evidence with existing knowledge instead of duplicating near-identical pages.
+- `query` pages should record the question, current answer or uncertainty, and related evidence.
+- `overview` should summarize the wiki's shape and point to the most important pages.
 """
 
 DEFAULT_OVERVIEW = """---
@@ -85,6 +108,8 @@ def write_wiki_page(paths: Paths, relative_path: str, content: str) -> Path:
     safe_rel = _safe_relative_markdown_path(relative_path)
     target = paths.wiki / safe_rel
     target.parent.mkdir(parents=True, exist_ok=True)
+    existing_text = target.read_text(encoding="utf-8", errors="replace") if target.exists() else None
+    content = add_frontmatter_timestamps(content, existing_text)
     target.write_text(content.strip() + "\n", encoding="utf-8")
     return target
 
@@ -181,6 +206,24 @@ def extract_wikilinks(text: str) -> list[str]:
     return sorted({match.strip() for match in WIKILINK_RE.findall(text)})
 
 
+def add_frontmatter_timestamps(content: str, existing_text: str | None = None) -> str:
+    content = content.strip()
+    match = FRONTMATTER_RE.match(content)
+    if not match:
+        return content
+
+    now = _timestamp()
+    created = (
+        (extract_frontmatter_value(existing_text, "created") if existing_text else None)
+        or extract_frontmatter_value(content, "created")
+        or now
+    )
+    frontmatter = _set_frontmatter_value(match.group(1), "created", created)
+    frontmatter = _set_frontmatter_value(frontmatter, "updated", now)
+    body = content[match.end() :].strip()
+    return f"---\n{frontmatter}\n---\n\n{body}"
+
+
 def strip_frontmatter(text: str) -> str:
     return FRONTMATTER_RE.sub("", text, count=1).strip()
 
@@ -197,6 +240,20 @@ def _write_if_missing(path: Path, content: str) -> None:
     if not path.exists():
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(content.strip() + "\n", encoding="utf-8")
+
+
+def _timestamp() -> str:
+    return datetime.now().isoformat(timespec="seconds")
+
+
+def _set_frontmatter_value(frontmatter: str, key: str, value: str) -> str:
+    line = f'{key}: "{value}"'
+    lines = frontmatter.splitlines()
+    for i, existing_line in enumerate(lines):
+        if existing_line.startswith(f"{key}:"):
+            lines[i] = line
+            return "\n".join(lines)
+    return "\n".join([*lines, line])
 
 
 def _safe_relative_markdown_path(relative_path: str) -> Path:

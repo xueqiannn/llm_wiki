@@ -30,7 +30,7 @@ def chat(messages: list[dict[str, str]], *, temperature: float = 0.2) -> str:
     response = client.chat.completions.create(
         model=model,
         messages=messages,
-        temperature=temperature,
+        # temperature=temperature,
     )
     return response.choices[0].message.content or ""
 
