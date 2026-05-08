@@ -9,9 +9,20 @@ from .config import Paths
 
 WIKILINK_RE = re.compile(r"\[\[([^\]|#]+)(?:#[^\]|]+)?(?:\|[^\]]+)?\]\]")
 FRONTMATTER_RE = re.compile(r"^---\n(.*?)\n---\n", re.DOTALL)
+SPECIAL_PAGE_NAMES = {"index.md", "log.md", "schema.md"}
+WIKI_PAGE_TYPES = ("overview", "source", "concept", "entity", "query", "lint")
+LLM_GENERATED_PAGE_TYPES = ("overview", "source", "concept", "entity", "query")
+REQUIRED_FRONTMATTER_FIELDS = ("title", "type", "sources")
+PAGE_TYPE_DIRECTORIES = {
+    "source": "sources",
+    "concept": "concepts",
+    "entity": "entities",
+    "query": "queries",
+    "lint": "lint",
+}
 
 
-DEFAULT_SCHEMA = """# Schema
+DEFAULT_SCHEMA = f"""# Schema
 
 This wiki demonstrates the minimal LLM Wiki mechanism.
 
@@ -22,7 +33,8 @@ This wiki demonstrates the minimal LLM Wiki mechanism.
 
 ## Page conventions
 - Every page starts with YAML frontmatter.
-- Use `type` values such as `source`, `concept`, `entity`, `overview`, and `query`.
+- Use `type` values: `{", ".join(WIKI_PAGE_TYPES)}`.
+- Required frontmatter fields: `{", ".join(REQUIRED_FRONTMATTER_FIELDS)}`.
 - Use Obsidian-style `[[wikilinks]]` to connect pages.
 - Prefer concise pages that can be updated incrementally.
 - Keep source traceability in `sources`.
@@ -34,13 +46,7 @@ This wiki demonstrates the minimal LLM Wiki mechanism.
 - Lint: check wiki health, find broken links/orphans/contradictions, and save lint reports.
 """
 
-DEFAULT_OVERVIEW = """---
-title: Overview
-type: overview
-sources: []
----
-
-# Overview
+DEFAULT_OVERVIEW = """# Overview
 
 This page is updated as sources are ingested. It should summarize the wiki's current shape and point to important pages with `[[wikilinks]]`.
 """
@@ -59,6 +65,8 @@ class Page:
 def init_workspace(paths: Paths) -> None:
     paths.raw_sources.mkdir(parents=True, exist_ok=True)
     paths.wiki.mkdir(parents=True, exist_ok=True)
+    for folder in sorted(set(PAGE_TYPE_DIRECTORIES.values())):
+        (paths.wiki / folder).mkdir(parents=True, exist_ok=True)
     _write_if_missing(paths.wiki / "schema.md", DEFAULT_SCHEMA)
     _write_if_missing(paths.wiki / "overview.md", DEFAULT_OVERVIEW)
     _write_if_missing(paths.wiki / "index.md", "# Index\n\n- [[Overview]] - Current wiki summary.\n")
@@ -77,7 +85,7 @@ def title_from_slug(value: str) -> str:
 
 
 def wiki_path_for_title(paths: Paths, title: str, page_type: str = "concept") -> Path:
-    folder = "sources" if page_type == "source" else page_type + "s"
+    folder = PAGE_TYPE_DIRECTORIES.get(page_type, f"{page_type}s")
     return paths.wiki / folder / f"{slugify(title)}.md"
 
 
@@ -101,7 +109,7 @@ def list_pages(paths: Paths) -> list[Page]:
         return []
     pages = []
     for path in sorted(paths.wiki.rglob("*.md")):
-        if path.name in {"index.md", "log.md", "schema.md"}:
+        if path.name in SPECIAL_PAGE_NAMES:
             continue
         text = path.read_text(encoding="utf-8", errors="replace")
         pages.append(
@@ -155,6 +163,13 @@ def extract_frontmatter_value(text: str, key: str) -> str | None:
     return None
 
 
+def has_frontmatter_key(text: str, key: str) -> bool:
+    match = FRONTMATTER_RE.match(text)
+    if not match:
+        return False
+    return any(line.startswith(f"{key}:") for line in match.group(1).splitlines())
+
+
 def extract_sources(text: str) -> list[str]:
     match = FRONTMATTER_RE.match(text)
     if not match:
@@ -179,6 +194,29 @@ def extract_sources(text: str) -> list[str]:
 
 def extract_wikilinks(text: str) -> list[str]:
     return sorted({match.strip() for match in WIKILINK_RE.findall(text)})
+
+
+def ensure_wiki_frontmatter(content: str, title: str, page_type: str, sources: list[str]) -> str:
+    if content.lstrip().startswith("---"):
+        return content
+    return build_wiki_page(title=title, page_type=page_type, sources=sources, body=content)
+
+
+def build_wiki_page(title: str, page_type: str, sources: list[str], body: str) -> str:
+    return f"{format_frontmatter(title, page_type, sources)}\n\n{body.strip()}\n"
+
+
+def format_frontmatter(title: str, page_type: str, sources: list[str]) -> str:
+    sources_block = "sources: []" if not sources else f"sources:\n{format_yaml_list(sources)}"
+    return f"""---
+title: "{title}"
+type: {page_type}
+{sources_block}
+---"""
+
+
+def format_yaml_list(values: list[str]) -> str:
+    return "\n".join(f'  - "{value}"' for value in values)
 
 
 def strip_frontmatter(text: str) -> str:

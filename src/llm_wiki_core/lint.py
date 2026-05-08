@@ -8,8 +8,11 @@ from .config import Paths, has_llm_config
 from .llm import chat
 from .wiki import (
     FRONTMATTER_RE,
+    REQUIRED_FRONTMATTER_FIELDS,
+    SPECIAL_PAGE_NAMES,
     append_log,
-    extract_frontmatter_value,
+    build_wiki_page,
+    has_frontmatter_key,
     init_workspace,
     list_pages,
     rebuild_index,
@@ -19,7 +22,6 @@ from .wiki import (
 )
 
 MAX_LINT_CONTEXT_CHARS = 24_000
-SPECIAL_FILES = {"index.md", "log.md", "schema.md"}
 GRAPH_HEALTH_EXCLUDED_TYPES = {"lint"}
 
 
@@ -80,13 +82,13 @@ def _check_frontmatter(paths: Paths, findings: list[LintFinding]) -> None:
                     category="frontmatter",
                     page=page,
                     message="Page is missing YAML frontmatter.",
-                    suggestion="Add frontmatter with at least `title`, `type`, and `sources`.",
+                    suggestion=f"Add frontmatter with required fields: {', '.join(REQUIRED_FRONTMATTER_FIELDS)}.",
                 )
             )
             continue
 
-        for key in ("title", "type"):
-            if not extract_frontmatter_value(text, key):
+        for key in REQUIRED_FRONTMATTER_FIELDS:
+            if not has_frontmatter_key(text, key):
                 findings.append(
                     LintFinding(
                         severity="warning",
@@ -96,17 +98,6 @@ def _check_frontmatter(paths: Paths, findings: list[LintFinding]) -> None:
                         suggestion=f"Add a `{key}` field so the wiki can be indexed consistently.",
                     )
                 )
-
-        if "sources:" not in FRONTMATTER_RE.match(text).group(1):
-            findings.append(
-                LintFinding(
-                    severity="warning",
-                    category="frontmatter",
-                    page=page,
-                    message="Page frontmatter is missing `sources`.",
-                    suggestion="Add `sources: []` or list the raw source filenames that support this page.",
-                )
-            )
 
 
 def _check_broken_links(pages, findings: list[LintFinding]) -> None:
@@ -240,13 +231,7 @@ def _format_report_markdown(title: str, findings: list[LintFinding], llm_review:
         rows = "| ok | deterministic | - | No deterministic issues found. | Keep ingesting and re-run lint periodically. |"
 
     llm_section = llm_review.strip() if llm_review.strip() else "LLM review was not run for this report."
-    return f"""---
-title: "{title}"
-type: lint
-sources: []
----
-
-# {title}
+    body = f"""# {title}
 
 ## Deterministic Checks
 
@@ -258,12 +243,13 @@ sources: []
 
 {llm_section}
 """
+    return build_wiki_page(title=title, page_type="lint", sources=[], body=body)
 
 
 def _wiki_markdown_paths(paths: Paths) -> list[Path]:
     if not paths.wiki.exists():
         return []
-    return sorted(path for path in paths.wiki.rglob("*.md") if path.name not in SPECIAL_FILES)
+    return sorted(path for path in paths.wiki.rglob("*.md") if path.name not in SPECIAL_PAGE_NAMES)
 
 
 def _page_title_lookup(pages) -> dict[str, Path]:

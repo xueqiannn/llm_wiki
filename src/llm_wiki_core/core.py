@@ -10,7 +10,10 @@ from .config import Paths, has_llm_config
 from .documents import extract_text
 from .llm import chat, parse_json_object
 from .wiki import (
+    LLM_GENERATED_PAGE_TYPES,
     append_log,
+    build_wiki_page,
+    ensure_wiki_frontmatter,
     first_sentence,
     init_workspace,
     list_pages,
@@ -121,13 +124,7 @@ def answer_question(paths: Paths, question: str, save: bool = False) -> tuple[st
     if save:
         title = f"Query - {question[:60]}"
         rel_path = f"queries/{datetime.now().strftime('%Y%m%d-%H%M%S')}-{slugify(question[:50])}.md"
-        content = f"""---
-title: "{title}"
-type: query
-sources: []
----
-
-# {title}
+        body = f"""# {title}
 
 ## Question
 
@@ -137,6 +134,7 @@ sources: []
 
 {answer}
 """
+        content = build_wiki_page(title=title, page_type="query", sources=[], body=body)
         saved_paths.append(write_wiki_page(paths, rel_path, content))
         rebuild_index(paths)
         append_log(paths, "query", f"Answered and saved query: `{question}`")
@@ -277,7 +275,7 @@ Return this shape:
     {{
       "path": "sources/source-title.md",
       "title": "Page Title",
-      "type": "source|concept|entity|overview",
+      "type": "{'|'.join(LLM_GENERATED_PAGE_TYPES)}",
       "content": "Full markdown page including useful [[wikilinks]]"
     }}
   ]
@@ -285,6 +283,7 @@ Return this shape:
 
 Rules:
 - Always create one source summary page under sources/.
+- Create wiki under corresponding type directory, e.g. sources/, concepts/, entities/, queries/, lint/.
 - Create or update only the few pages needed to integrate the source.
 - Use concise markdown and Obsidian-style [[wikilinks]].
 - Include source traceability in frontmatter.
@@ -423,17 +422,7 @@ def _clean_page_dict(page: object, source_path: Path) -> dict[str, str]:
 
 
 def _ensure_frontmatter(content: str, title: str, page_type: str, source_name: str) -> str:
-    if content.lstrip().startswith("---"):
-        return content
-    return f"""---
-title: "{title}"
-type: {page_type}
-sources:
-  - "{source_name}"
----
-
-{content.strip()}
-"""
+    return ensure_wiki_frontmatter(content, title, page_type, [source_name])
 
 
 def _fallback_concepts(text: str, limit: int = 4) -> list[str]:
