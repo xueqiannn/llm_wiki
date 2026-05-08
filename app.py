@@ -4,7 +4,7 @@ import streamlit as st
 import streamlit.components.v1 as components
 
 from llm_wiki_core.config import get_paths, has_llm_config, openai_model
-from llm_wiki_core.core import answer_question, ingest_source, save_uploaded_file, search_pages
+from llm_wiki_core.core import answer_question, ingest_source, reingest_raw_sources, save_uploaded_file, search_pages
 from llm_wiki_core.graph import graph_html, graph_stats
 from llm_wiki_core.lint import lint_wiki
 from llm_wiki_core.wiki import init_workspace, list_pages, rebuild_index, strip_frontmatter
@@ -55,6 +55,24 @@ with tab_ingest:
                     st.write(f"Wrote wiki page: `{page.relative_to(paths.wiki).as_posix()}`")
                 status.update(label=f"Ingested {upload.name}", state="complete")
         st.success("Ingest complete.")
+
+    st.divider()
+    st.subheader("Clean And Re-ingest")
+    raw_sources = sorted(path for path in paths.raw_sources.rglob("*") if path.is_file())
+    st.write(
+        "Delete the generated wiki and rebuild it from the raw source files already saved in "
+        f"`{paths.raw_sources}`."
+    )
+    st.caption(f"{len(raw_sources)} raw source file(s) available.")
+    confirm_reingest = st.checkbox("I understand this will delete all generated wiki pages first.")
+
+    if st.button("Clean wiki and re-ingest raw sources", disabled=not confirm_reingest or not raw_sources):
+        with st.status("Cleaning wiki and re-ingesting raw sources...", expanded=True) as status:
+            result = reingest_raw_sources(paths, guidance=guidance, progress=st.write)
+            for source_path, ingest_result in zip(result.sources, result.results, strict=True):
+                st.write(f"`{source_path.name}` wrote {len(ingest_result.written_paths)} wiki page(s).")
+            status.update(label="Clean re-ingest complete", state="complete")
+        st.success(f"Re-ingested {len(result.sources)} raw source file(s).")
 
 with tab_wiki:
     st.subheader("Generated Wiki")

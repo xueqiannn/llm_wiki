@@ -33,6 +33,12 @@ class IngestResult:
     used_llm: bool
 
 
+@dataclass(frozen=True)
+class ReingestResult:
+    sources: list[Path]
+    results: list[IngestResult]
+
+
 def save_uploaded_file(paths: Paths, filename: str, data: bytes) -> Path:
     init_workspace(paths)
     target = unique_path(paths.raw_sources / filename)
@@ -47,6 +53,28 @@ def copy_source_into_workspace(paths: Paths, source: Path) -> Path:
     target.parent.mkdir(parents=True, exist_ok=True)
     shutil.copy2(source, target)
     return target
+
+
+def reingest_raw_sources(
+    paths: Paths,
+    guidance: str = "",
+    progress: Callable[[str], None] | None = None,
+) -> ReingestResult:
+    init_workspace(paths)
+    sources = sorted(path for path in paths.raw_sources.rglob("*") if path.is_file())
+
+    if paths.wiki.exists():
+        shutil.rmtree(paths.wiki)
+    init_workspace(paths)
+
+    results: list[IngestResult] = []
+    for source_path in sources:
+        if progress:
+            progress(f"Re-ingesting `{source_path.name}`...")
+        results.append(ingest_source(paths, source_path, guidance=guidance, progress=progress))
+
+    append_log(paths, "reingest", f"Cleaned wiki and re-ingested {len(sources)} raw source file(s).")
+    return ReingestResult(sources=sources, results=results)
 
 
 def ingest_source(
